@@ -2,7 +2,7 @@
 
 import { useState, useEffect, useRef, useCallback } from 'react';
 import { Lead } from '@/lib/types';
-import { Loader2, Download, Star, Mail, ExternalLink, Trash2, ChevronLeft, ChevronRight, Search, MapPin, X, Zap, Shield, ChevronDown, Check, RotateCcw } from 'lucide-react';
+import { Loader2, Download, Star, Mail, ExternalLink, Trash2, ChevronLeft, ChevronRight, Search, MapPin, X, Zap, Shield, ChevronDown, Check, RotateCcw, Bot } from 'lucide-react';
 
 interface ProjectInfo { id: string; name: string; emoji: string; color: string; description: string; connected: boolean; }
 interface FilterOption { value: string; count: number; }
@@ -145,6 +145,10 @@ export default function SavedLeads() {
   const [isResetting, setIsResetting] = useState(false);
   const [enrichDone, setEnrichDone] = useState<{ processed: number; found: number; sources: Record<string, number> } | null>(null);
   const enrichAbortRef = useRef(false);
+
+  // Agent
+  const [agentRunning, setAgentRunning] = useState(false);
+  const [agentStatus, setAgentStatus] = useState<string | null>(null);
 
   // Load projects
   useEffect(() => {
@@ -392,8 +396,8 @@ export default function SavedLeads() {
       <div className="topbar">
         <div>
           <h1>Saved Leads</h1>
-          <div className="topbar-subtitle">
-            {dbTotalLeads.toLocaleString()} total in database
+          <div className="topbar-subtitle" style={{ color: 'var(--text-secondary)' }}>
+            <span style={{ color: 'rgba(255,255,255,0.7)' }}>{dbTotalLeads.toLocaleString()} total in database</span>
             {dbWithEmail > 0 && <span style={{ color: 'var(--success)', marginLeft: '8px' }}>· {dbWithEmail.toLocaleString()} with email</span>}
           </div>
         </div>
@@ -447,7 +451,7 @@ export default function SavedLeads() {
                 </div>
                 <div>
                   <div style={{ fontWeight: 600, fontSize: '14px', color: 'var(--text-primary)' }}>Email Enrichment</div>
-                  <div style={{ fontSize: '12px', color: 'var(--text-muted)', marginTop: '2px' }}>
+                  <div style={{ fontSize: '12px', color: 'rgba(255,255,255,0.6)', marginTop: '2px' }}>
                     {isEnriching ? (
                       <>
                         Multi-strategy scan... {enrichProgress.processed.toLocaleString()} of {enrichProgress.total.toLocaleString()} · <span style={{ color: 'var(--success)' }}>{enrichProgress.found} emails found</span>
@@ -488,7 +492,7 @@ export default function SavedLeads() {
                 )}
                 {!isEnriching ? (
                   <>
-                    <button type="button" onClick={(e) => { e.preventDefault(); handleResetEnrichment(); }} disabled={isResetting} className="btn btn-secondary" style={{ padding: '8px 16px', fontSize: '12px', borderColor: 'rgba(255,255,255,0.1)', color: 'var(--text-muted)' }} title="Reset previously-attempted leads so they can be re-enriched">
+                    <button type="button" onClick={(e) => { e.preventDefault(); handleResetEnrichment(); }} disabled={isResetting} className="btn btn-secondary" style={{ padding: '8px 16px', fontSize: '12px' }} title="Reset previously-attempted leads so they can be re-enriched">
                       <RotateCcw className={`w-3.5 h-3.5${isResetting ? ' animate-spin' : ''}`} /> {isResetting ? 'Resetting...' : 'Reset & Retry'}
                     </button>
                     <button onClick={() => handleEnrichEmails(false)} disabled={enrichableCount === 0} className="btn btn-secondary" style={{ padding: '8px 16px', fontSize: '12px' }}>
@@ -497,6 +501,46 @@ export default function SavedLeads() {
                     <button onClick={() => handleEnrichEmails(true)} disabled={enrichableCount === 0} className="btn btn-secondary" style={{ padding: '8px 16px', fontSize: '12px', borderColor: 'rgba(255,170,0,0.3)', color: '#ffaa00' }}>
                       <Zap className="w-3.5 h-3.5" /> Deep + Apify ($)
                     </button>
+                    <button
+                      onClick={async () => {
+                        setAgentRunning(true);
+                        setAgentStatus('🤖 Agent triggered — running in background...');
+                        try {
+                          const res = await fetch('/api/cron/enrich', {
+                            method: 'POST',
+                            headers: { 'Content-Type': 'application/json' },
+                            body: JSON.stringify({
+                              projectId: selectedProject,
+                              industry: industryFilter.length > 0 ? industryFilter.join(',') : undefined,
+                              state: stateFilter.length > 0 ? stateFilter.join(',') : undefined,
+                              city: cityFilter.length > 0 ? cityFilter.join(',') : undefined,
+                            }),
+                          });
+                          const data = await res.json();
+                          if (data.status === 'chained') {
+                            setAgentStatus(`🤖 Agent running — processed ${data.totalProcessed} leads, found ${data.totalEnriched} emails. Self-chaining to continue (~${data.remaining?.toLocaleString()} remaining)...`);
+                          } else if (data.status === 'complete') {
+                            setAgentStatus(`✅ Agent complete — ${data.totalEnriched} emails found from ${data.totalProcessed} leads.`);
+                            fetchLeads();
+                            fetchFilters();
+                          } else if (data.error) {
+                            setAgentStatus(`❌ Agent error: ${data.error}`);
+                          }
+                        } catch (err) {
+                          setAgentStatus(`❌ Failed to trigger agent`);
+                        } finally {
+                          setAgentRunning(false);
+                          // Auto-clear status after 30s
+                          setTimeout(() => setAgentStatus(null), 30000);
+                        }
+                      }}
+                      disabled={agentRunning || enrichableCount === 0}
+                      className="btn btn-secondary"
+                      style={{ padding: '8px 16px', fontSize: '12px', borderColor: 'rgba(0,214,143,0.3)', color: 'var(--success)' }}
+                      title="Run enrichment agent in background — no browser tab needed"
+                    >
+                      <Bot className={`w-3.5 h-3.5${agentRunning ? ' animate-spin' : ''}`} /> {agentRunning ? 'Agent Running...' : '🤖 Agent Run'}
+                    </button>
                   </>
                 ) : (
                   <button onClick={() => { enrichAbortRef.current = true; }} className="btn btn-secondary" style={{ padding: '8px 16px', fontSize: '12px', borderColor: 'rgba(255,107,107,0.3)' }}>Stop</button>
@@ -504,6 +548,11 @@ export default function SavedLeads() {
               </div>
             </div>
           </div>
+        {agentStatus && (
+          <div style={{ marginTop: '12px', padding: '10px 16px', borderRadius: '8px', background: 'rgba(0,214,143,0.06)', border: '1px solid rgba(0,214,143,0.15)', fontSize: '12px', color: 'var(--text-secondary)' }}>
+            {agentStatus}
+          </div>
+        )}
         </div>
       )}
 
@@ -652,7 +701,7 @@ export default function SavedLeads() {
                           <Mail className="w-3 h-3" />{lead.email}
                         </div>
                       ) : (
-                        <div style={{ color: 'var(--text-muted)', fontSize: '11px', marginTop: '2px' }}>No email</div>
+                        <div style={{ color: 'var(--text-secondary)', fontSize: '11px', marginTop: '2px' }}>No email</div>
                       )}
                     </td>
                     <td>

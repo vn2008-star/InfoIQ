@@ -7,11 +7,11 @@
   --bg-card: #161822;
   --bg-elevated: #1c1e2a;
   --bg-hover: #22243a;
-  --border: rgba(255,255,255,0.06);
-  --border-active: rgba(255,255,255,0.15);
+  --border: rgba(255,255,255,0.10);
+  --border-active: rgba(255,255,255,0.22);
   --text-primary: #f0f0f5;
-  --text-secondary: #8b8d9e;
-  --text-muted: #555770;
+  --text-secondary: #c8cad9;
+  --text-muted: #9a9cb3;
   --accent: #6c5ce7;
   --accent-light: #a29bfe;
   --accent-glow: rgba(108,92,231,0.15);
@@ -223,7 +223,7 @@ body {
 
 .btn-secondary {
   background: var(--bg-elevated);
-  color: var(--text-secondary);
+  color: var(--text-primary);
   border: 1px solid var(--border);
 }
 

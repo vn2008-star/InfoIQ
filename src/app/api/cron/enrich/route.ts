@@ -129,23 +129,10 @@ async function enrichSingleLead(
   return false;
 }
 
-// ── Main cron handler ──
+// ── Shared enrichment runner ──
 
-export async function GET(request: Request) {
-  // Security check
-  const { searchParams } = new URL(request.url);
-  const secret = request.headers.get('authorization')?.replace('Bearer ', '')
-    || searchParams.get('secret');
-  const expectedSecret = process.env.CRON_SECRET;
-
-  if (expectedSecret && secret !== expectedSecret) {
-    return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
-  }
-
-  const chain = parseInt(searchParams.get('chain') || '0');
-  const projectId = searchParams.get('project') || 'glowup';
-
-  console.log(`[Agent] 🤖 Starting enrichment chain #${chain}`);
+async function runEnrichment(chain: number, projectId: string, filters: { industry?: string; state?: string; city?: string } = {}) {
+  console.log(`[Agent] 🤖 Starting enrichment chain #${chain}${filters.industry ? ` [${filters.industry}]` : ''}`);
 
   const supabase = getSupabaseClient(projectId);
   if (!supabase) {
@@ -155,16 +142,33 @@ export async function GET(request: Request) {
   const startTime = Date.now();
   let totalProcessed = 0;
   let totalEnriched = 0;
+  let remaining = 0;
 
   try {
     // Process leads in batches until time runs out
     while (Date.now() - startTime < RUN_TIME_LIMIT) {
       // Fetch next batch of unenriched leads
-      const { data: leads, error, count } = await supabase
+      let query = supabase
         .from('leads')
         .select('id, business_name, website, email, city, state', { count: 'exact' })
         .or('email.is.null,email.eq.')
-        .or('enrichment_attempted.is.null,enrichment_attempted.eq.false')
+        .or('enrichment_attempted.is.null,enrichment_attempted.eq.false');
+
+      // Apply filters
+      if (filters.industry) {
+        const vals = filters.industry.split(',').map(s => s.trim()).filter(Boolean);
+        query = vals.length === 1 ? query.eq('industry', vals[0]) : query.in('industry', vals);
+      }
+      if (filters.state) {
+        const vals = filters.state.split(',').map(s => s.trim()).filter(Boolean);
+        query = vals.length === 1 ? query.eq('state', vals[0]) : query.in('state', vals);
+      }
+      if (filters.city) {
+        const vals = filters.city.split(',').map(s => s.trim()).filter(Boolean);
+        query = vals.length === 1 ? query.eq('city', vals[0]) : query.in('city', vals);
+      }
+
+      const { data: leads, error, count } = await query
         .order('created_at', { ascending: true })
         .limit(LEADS_PER_RUN);
 
@@ -177,6 +181,7 @@ export async function GET(request: Request) {
           chain,
           totalProcessed,
           totalEnriched,
+          remaining: 0,
         });
       }
 
@@ -198,7 +203,7 @@ export async function GET(request: Request) {
         await new Promise(r => setTimeout(r, 300));
       }
 
-      const remaining = (count || 0) - leads.length;
+      remaining = Math.max(0, (count || 0) - leads.length);
       console.log(`[Agent] Chain #${chain}: processed=${totalProcessed}, enriched=${totalEnriched}, remaining≈${remaining}`);
 
       // If we processed all fetched leads and there are more, continue the loop
@@ -208,14 +213,21 @@ export async function GET(request: Request) {
           chain,
           totalProcessed,
           totalEnriched,
+          remaining: 0,
         });
       }
     }
 
     // Time's almost up — self-chain to continue
     if (chain < MAX_CHAINS) {
+      const expectedSecret = process.env.CRON_SECRET;
       const baseUrl = process.env.NEXT_PUBLIC_BASE_URL || 'https://info-iq.vercel.app';
-      const nextUrl = `${baseUrl}/api/cron/enrich?chain=${chain + 1}&project=${projectId}${expectedSecret ? `&secret=${expectedSecret}` : ''}`;
+      const filterParams = [
+        filters.industry ? `&industry=${encodeURIComponent(filters.industry)}` : '',
+        filters.state ? `&state=${encodeURIComponent(filters.state)}` : '',
+        filters.city ? `&city=${encodeURIComponent(filters.city)}` : '',
+      ].join('');
+      const nextUrl = `${baseUrl}/api/cron/enrich?chain=${chain + 1}&project=${projectId}${expectedSecret ? `&secret=${expectedSecret}` : ''}${filterParams}`;
 
       // Fire-and-forget: trigger next chain
       fetch(nextUrl, { signal: AbortSignal.timeout(5000) }).catch(() => {
@@ -233,6 +245,7 @@ export async function GET(request: Request) {
       nextChain: chain + 1,
       totalProcessed,
       totalEnriched,
+      remaining,
     });
   } catch (err) {
     const msg = err instanceof Error ? err.message : 'Unknown error';
@@ -240,3 +253,34 @@ export async function GET(request: Request) {
     return NextResponse.json({ error: msg, chain, totalProcessed, totalEnriched }, { status: 500 });
   }
 }
+
+// ── GET: Vercel Cron trigger (requires CRON_SECRET) ──
+
+export async function GET(request: Request) {
+  const { searchParams } = new URL(request.url);
+  const secret = request.headers.get('authorization')?.replace('Bearer ', '')
+    || searchParams.get('secret');
+  const expectedSecret = process.env.CRON_SECRET;
+
+  if (expectedSecret && secret !== expectedSecret) {
+    return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
+  }
+
+  const chain = parseInt(searchParams.get('chain') || '0');
+  const projectId = searchParams.get('project') || 'glowup';
+  const filters = {
+    industry: searchParams.get('industry') || undefined,
+    state: searchParams.get('state') || undefined,
+    city: searchParams.get('city') || undefined,
+  };
+
+  return runEnrichment(chain, projectId, filters);
+}
+
+// ── POST: Manual trigger from UI (no secret needed) ──
+
+export async function POST(request: Request) {
+  const { projectId = 'glowup', industry, state, city } = await request.json();
+  return runEnrichment(0, projectId, { industry, state, city });
+}
+
