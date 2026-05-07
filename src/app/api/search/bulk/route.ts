@@ -46,7 +46,21 @@ async function searchYelpHybrid(industry: string, stateCode: string, stateName: 
   console.log(`[Bulk Yelp] Searching state: ${stateName} (${stateCode})`);
   const stateResult = await fetchYelpPaginated(apiKey, industry, `${stateName}, ${country}`, maxResults);
 
-  const isCapped = stateResult.totalAvailable >= YELP_CAP_THRESHOLD;
+  // If the API completely failed (0 leads, no real total), return early with error info
+  if (stateResult.leads.length === 0 && !stateResult.gotData) {
+    console.log(`[Bulk Yelp] ${stateCode}: API failed (error: ${stateResult.error || 'unknown'})`);
+    return NextResponse.json({
+      leads: [],
+      stateCode,
+      stateName,
+      totalAvailable: 0,
+      drilled: false,
+      error: stateResult.error || 'Yelp API returned no data',
+    });
+  }
+
+  // Only consider capped if we actually received leads near the threshold
+  const isCapped = stateResult.gotData && stateResult.leads.length >= YELP_CAP_THRESHOLD;
   let allLeads = [...stateResult.leads];
   let drilled = false;
   const drilledCities: string[] = [];
@@ -104,11 +118,15 @@ async function searchYelpHybrid(industry: string, stateCode: string, stateName: 
 async function fetchYelpPaginated(apiKey: string, industry: string, location: string, maxResults: number) {
   const target = Math.min(maxResults, MAX_YELP_TOTAL);
   const allBusinesses: any[] = [];
-  let totalAvailable = Infinity;
+  let totalAvailable = 0;
   let offset = 0;
   let retries = 0;
+  let gotData = false;
+  let lastError: string | null = null;
 
-  while (allBusinesses.length < target && offset < totalAvailable) {
+  let firstRequest = true;
+  while (allBusinesses.length < target && (firstRequest || offset < totalAvailable)) {
+    firstRequest = false;
     const limit = Math.min(MAX_YELP_PER_REQUEST, target - allBusinesses.length);
 
     try {
@@ -124,16 +142,22 @@ async function fetchYelpPaginated(apiKey: string, industry: string, location: st
       });
 
       if (!response.ok) {
+        lastError = `HTTP ${response.status}`;
         if (response.status === 429) {
+          lastError = 'Rate limited (429)';
           retries++;
           if (retries > 3) break;
           await new Promise(r => setTimeout(r, 2000 * retries));
           continue;
         }
+        if (response.status === 401) {
+          lastError = 'Invalid API key (401)';
+        }
         break;
       }
 
       const data = await response.json();
+      gotData = true;
       if (data.total !== undefined) {
         totalAvailable = Math.min(data.total, MAX_YELP_TOTAL);
       }
@@ -170,7 +194,7 @@ async function fetchYelpPaginated(apiKey: string, industry: string, location: st
     status: 'New' as const,
   }));
 
-  return { leads, totalAvailable };
+  return { leads, totalAvailable, gotData, error: lastError };
 }
 
 /**

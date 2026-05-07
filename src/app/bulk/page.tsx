@@ -151,11 +151,15 @@ export default function BulkScrape() {
             setDrillLog(prev => [...prev, `🔍 ${state.name}: drilled ${data.drilledCities.length} cities → ${data.leads.length} unique`]);
           }
         } else {
+          const hasError = data.error || !res.ok;
           setStateResults(prev => {
             const next = new Map(prev);
-            next.set(state.code, { stateCode: state.code, stateName: state.name, status: 'done', count: 0, error: data.error });
+            next.set(state.code, { stateCode: state.code, stateName: state.name, status: hasError ? 'error' : 'done', count: 0, error: data.error });
             return next;
           });
+          if (data.error) {
+            setDrillLog(prev => [...prev, `❌ ${state.name}: ${data.error}`]);
+          }
         }
       } catch (err: any) {
         setStateResults(prev => {
@@ -163,6 +167,7 @@ export default function BulkScrape() {
           next.set(state.code, { stateCode: state.code, stateName: state.name, status: 'error', count: 0, error: err.message });
           return next;
         });
+        setDrillLog(prev => [...prev, `❌ ${state.name}: ${err.message}`]);
       }
 
       if (mode === 'yelp') await new Promise(r => setTimeout(r, 500));
