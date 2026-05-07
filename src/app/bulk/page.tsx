@@ -41,6 +41,7 @@ export default function BulkScrape() {
   const [isPaused, setIsPaused] = useState(false);
   const pauseRef = useRef(false);
   const abortRef = useRef(false);
+  const abortControllerRef = useRef<AbortController | null>(null);
 
   const [stateResults, setStateResults] = useState<Map<string, StateResult>>(new Map());
   const [allLeads, setAllLeads] = useState<Lead[]>([]);
@@ -96,6 +97,7 @@ export default function BulkScrape() {
     setIsPaused(false);
     pauseRef.current = false;
     abortRef.current = false;
+    abortControllerRef.current = new AbortController();
 
     const statesToScrape = US_STATES.filter(s => selectedStates.has(s.code));
     const initResults = new Map<string, StateResult>();
@@ -128,6 +130,7 @@ export default function BulkScrape() {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ industry, stateCode: state.code, stateName: state.name, country: 'US', mode, maxPerState: mode === 'yelp' ? 1000 : 500 }),
+          signal: abortControllerRef.current?.signal,
         });
 
         const data = await res.json();
@@ -162,6 +165,7 @@ export default function BulkScrape() {
           }
         }
       } catch (err: any) {
+        if (err.name === 'AbortError') break;
         setStateResults(prev => {
           const next = new Map(prev);
           next.set(state.code, { stateCode: state.code, stateName: state.name, status: 'error', count: 0, error: err.message });
@@ -367,7 +371,7 @@ export default function BulkScrape() {
                   className={`btn ${isPaused ? 'btn-primary' : 'btn-secondary'}`} style={{ borderColor: 'rgba(255,170,0,0.3)' }}>
                   {isPaused ? <><Play className="w-4 h-4" /> Resume</> : <><Pause className="w-4 h-4" /> Pause</>}
                 </button>
-                <button onClick={() => { abortRef.current = true; pauseRef.current = false; setIsPaused(false); }} className="btn btn-ghost" style={{ color: 'var(--danger)' }}>
+                <button onClick={() => { abortRef.current = true; pauseRef.current = false; setIsPaused(false); abortControllerRef.current?.abort(); }} className="btn btn-ghost" style={{ color: 'var(--danger)' }}>
                   Stop
                 </button>
               </>
