@@ -56,6 +56,7 @@ async function searchYelpHybrid(industry: string, stateCode: string, stateName: 
       totalAvailable: 0,
       drilled: false,
       error: stateResult.error || 'Yelp API returned no data',
+      rateLimited: stateResult.rateLimited || false,
     });
   }
 
@@ -123,7 +124,9 @@ async function fetchYelpPaginated(apiKey: string, industry: string, location: st
   let retries = 0;
   let gotData = false;
   let lastError: string | null = null;
-  const MAX_RETRIES = 5;
+  let rateLimited = false;
+  // Only retry twice on rate limits — let the client handle the long cooldown
+  const MAX_RETRIES = 2;
 
   let firstRequest = true;
   while (allBusinesses.length < target && (firstRequest || offset < totalAvailable)) {
@@ -146,14 +149,15 @@ async function fetchYelpPaginated(apiKey: string, industry: string, location: st
         lastError = `HTTP ${response.status}`;
         // Handle both 429 (standard) and 420 (Yelp custom) rate limits
         if (response.status === 429 || response.status === 420) {
+          rateLimited = true;
           lastError = `Rate limited (${response.status})`;
           retries++;
           if (retries > MAX_RETRIES) {
             console.warn(`[Yelp] Rate limit exhausted after ${MAX_RETRIES} retries for: ${location}`);
             break;
           }
-          // Exponential backoff: 5s, 10s, 20s, 40s, 80s + jitter
-          const backoffMs = Math.min(5000 * Math.pow(2, retries - 1), 80000) + Math.random() * 2000;
+          // Wait 10s on first retry, 20s on second + jitter
+          const backoffMs = 10000 * retries + Math.random() * 3000;
           console.log(`[Yelp] Rate limited (${response.status}). Retry ${retries}/${MAX_RETRIES} in ${(backoffMs / 1000).toFixed(1)}s for: ${location}`);
           await new Promise(r => setTimeout(r, backoffMs));
           continue;
@@ -166,6 +170,7 @@ async function fetchYelpPaginated(apiKey: string, industry: string, location: st
 
       const data = await response.json();
       gotData = true;
+      rateLimited = false; // Successfully got data, reset rate limit flag
       if (data.total !== undefined) {
         totalAvailable = Math.min(data.total, MAX_YELP_TOTAL);
       }
@@ -203,7 +208,7 @@ async function fetchYelpPaginated(apiKey: string, industry: string, location: st
     status: 'New' as const,
   }));
 
-  return { leads, totalAvailable, gotData, error: lastError };
+  return { leads, totalAvailable, gotData, rateLimited, error: lastError };
 }
 
 /**

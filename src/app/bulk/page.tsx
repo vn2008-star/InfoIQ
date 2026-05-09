@@ -125,6 +125,7 @@ export default function BulkScrape() {
         return next;
       });
 
+      let wasRateLimited = false;
       try {
         const res = await fetch('/api/search/bulk', {
           method: 'POST',
@@ -134,6 +135,7 @@ export default function BulkScrape() {
         });
 
         const data = await res.json();
+        wasRateLimited = data.rateLimited || false;
 
         if (data.leads && data.leads.length > 0) {
           setAllLeads(prev => {
@@ -174,8 +176,23 @@ export default function BulkScrape() {
         setDrillLog(prev => [...prev, `❌ ${state.name}: ${err.message}`]);
       }
 
-      // Respectful delay between states to avoid rate limiting
-      if (mode === 'yelp') await new Promise(r => setTimeout(r, 2500 + Math.random() * 1000));
+      if (mode === 'yelp') {
+        if (wasRateLimited && !abortRef.current) {
+          // Long cooldown after rate limit — count down in the log
+          const cooldownSec = 60;
+          setDrillLog(prev => [...prev, `⏳ Rate limited — cooling down ${cooldownSec}s before next state...`]);
+          for (let s = cooldownSec; s > 0 && !abortRef.current; s--) {
+            setCurrentState(`⏳ ${s}s`);
+            while (pauseRef.current && !abortRef.current) {
+              await new Promise(r => setTimeout(r, 300));
+            }
+            await new Promise(r => setTimeout(r, 1000));
+          }
+        } else {
+          // Normal delay between states
+          await new Promise(r => setTimeout(r, 2500 + Math.random() * 1000));
+        }
+      }
     }
 
     setCurrentState(null);
