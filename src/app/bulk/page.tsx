@@ -174,7 +174,8 @@ export default function BulkScrape() {
         setDrillLog(prev => [...prev, `❌ ${state.name}: ${err.message}`]);
       }
 
-      if (mode === 'yelp') await new Promise(r => setTimeout(r, 500));
+      // Respectful delay between states to avoid rate limiting
+      if (mode === 'yelp') await new Promise(r => setTimeout(r, 2500 + Math.random() * 1000));
     }
 
     setCurrentState(null);

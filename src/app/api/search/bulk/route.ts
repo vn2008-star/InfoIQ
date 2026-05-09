@@ -79,8 +79,8 @@ async function searchYelpHybrid(industry: string, stateCode: string, stateName: 
             allLeads.push(...cityResult.leads);
             drilledCities.push(`${city} (${cityResult.leads.length})`);
           }
-          // Small delay between city searches
-          await new Promise(r => setTimeout(r, 300));
+          // Delay between city searches to respect rate limits
+          await new Promise(r => setTimeout(r, 800 + Math.random() * 400));
         } catch (err) {
           console.error(`[Bulk Yelp] City drill failed for ${city}, ${stateCode}:`, err);
         }
@@ -123,6 +123,7 @@ async function fetchYelpPaginated(apiKey: string, industry: string, location: st
   let retries = 0;
   let gotData = false;
   let lastError: string | null = null;
+  const MAX_RETRIES = 5;
 
   let firstRequest = true;
   while (allBusinesses.length < target && (firstRequest || offset < totalAvailable)) {
@@ -143,11 +144,18 @@ async function fetchYelpPaginated(apiKey: string, industry: string, location: st
 
       if (!response.ok) {
         lastError = `HTTP ${response.status}`;
-        if (response.status === 429) {
-          lastError = 'Rate limited (429)';
+        // Handle both 429 (standard) and 420 (Yelp custom) rate limits
+        if (response.status === 429 || response.status === 420) {
+          lastError = `Rate limited (${response.status})`;
           retries++;
-          if (retries > 3) break;
-          await new Promise(r => setTimeout(r, 2000 * retries));
+          if (retries > MAX_RETRIES) {
+            console.warn(`[Yelp] Rate limit exhausted after ${MAX_RETRIES} retries for: ${location}`);
+            break;
+          }
+          // Exponential backoff: 5s, 10s, 20s, 40s, 80s + jitter
+          const backoffMs = Math.min(5000 * Math.pow(2, retries - 1), 80000) + Math.random() * 2000;
+          console.log(`[Yelp] Rate limited (${response.status}). Retry ${retries}/${MAX_RETRIES} in ${(backoffMs / 1000).toFixed(1)}s for: ${location}`);
+          await new Promise(r => setTimeout(r, backoffMs));
           continue;
         }
         if (response.status === 401) {
@@ -168,12 +176,13 @@ async function fetchYelpPaginated(apiKey: string, industry: string, location: st
       retries = 0;
 
       if (allBusinesses.length < target) {
-        await new Promise(r => setTimeout(r, 150));
+        // Respectful delay between pages: 500ms + jitter
+        await new Promise(r => setTimeout(r, 500 + Math.random() * 300));
       }
     } catch {
       retries++;
-      if (retries > 3) break;
-      await new Promise(r => setTimeout(r, 1000));
+      if (retries > MAX_RETRIES) break;
+      await new Promise(r => setTimeout(r, 2000 * retries));
     }
   }
 
